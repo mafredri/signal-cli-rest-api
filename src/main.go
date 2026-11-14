@@ -285,6 +285,7 @@ func main() {
 		profiles := v1.Group("profiles")
 		{
 			profiles.PUT(":number", api.UpdateProfile)
+			profiles.PATCH(":number", api.PatchProfile)
 		}
 
 		identities := v1.Group("identities")
