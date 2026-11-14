@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 ARG SIGNAL_CLI_VERSION=0.14.10
 ARG LIBSIGNAL_CLIENT_VERSION=0.106.1
 
@@ -6,6 +7,24 @@ ARG SWAG_VERSION=1.16.4
 ARG S6_OVERLAY_VERSION=v3.2.2.0
 
 ARG BUILD_VERSION_ARG=unset
+
+# Git source of signal-cli's Java distribution, as a URL with a ref. The
+# default is the release the image installs; point it at a branch or commit
+# to run signal-cli changes that are not released.
+ARG SIGNAL_CLI_SOURCE=https://github.com/AsamK/signal-cli.git#v${SIGNAL_CLI_VERSION}
+ARG SIGNAL_CLI_JAVA_BUILD_IMAGE=docker.io/azul/zulu-openjdk:25-latest@sha256:8fabae0f27056a27b69485952600d77cd5be0d9fb091e8f453358577b570ae21
+
+FROM --platform=$BUILDPLATFORM ${SIGNAL_CLI_JAVA_BUILD_IMAGE} AS signal-cli-java
+ARG SIGNAL_CLI_VERSION
+ARG SIGNAL_CLI_SOURCE
+ADD --keep-git-dir=false ${SIGNAL_CLI_SOURCE} /src/signal-cli
+WORKDIR /src/signal-cli
+# The later steps find the distribution's jars by SIGNAL_CLI_VERSION, so the
+# build carries that version whatever the source declares.
+RUN sed -i -E "s/^( +version = )\"[^\"]*\"/\\1\"${SIGNAL_CLI_VERSION}\"/" build.gradle.kts \
+	&& grep -q "version = \"${SIGNAL_CLI_VERSION}\"" build.gradle.kts \
+	&& ./gradlew --no-daemon --max-workers=2 installDist \
+	&& test -f build/install/signal-cli/lib/signal-cli-${SIGNAL_CLI_VERSION}.jar
 
 FROM golang:1.26-trixie AS buildcontainer
 
@@ -47,6 +66,13 @@ RUN go install github.com/swaggo/swag/cmd/swag@v${SWAG_VERSION}
 RUN cd /tmp/ \
 	&& wget -nv https://github.com/AsamK/signal-cli/releases/download/v${SIGNAL_CLI_VERSION}/signal-cli-${SIGNAL_CLI_VERSION}.tar.gz -O /tmp/signal-cli.tar.gz \
 	&& tar xf signal-cli.tar.gz
+
+# Use the Java distribution built from SIGNAL_CLI_SOURCE. The native binary
+# below is the release's.
+COPY --from=signal-cli-java /src/signal-cli/build/install/signal-cli /tmp/signal-cli-java
+RUN rm -rf /tmp/signal-cli-${SIGNAL_CLI_VERSION}/bin /tmp/signal-cli-${SIGNAL_CLI_VERSION}/lib \
+	&& cp -r /tmp/signal-cli-java/bin /tmp/signal-cli-java/lib /tmp/signal-cli-${SIGNAL_CLI_VERSION}/ \
+	&& rm -rf /tmp/signal-cli-java
 
 RUN if [ "$(uname -m)" = "x86_64" ]; then \
 		cd /tmp \
