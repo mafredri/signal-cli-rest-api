@@ -2754,7 +2754,12 @@ func (a *Api) GetProfileAvatar(c *gin.Context) {
 
 	avatar, err := a.signalClient.GetAvatar(number, uuid, client.ProfileAvatar)
 	if err != nil {
-		c.JSON(400, Error{Msg: err.Error()})
+		switch err.(type) {
+		case *client.NotFoundError:
+			c.JSON(404, Error{Msg: err.Error()})
+		default:
+			c.JSON(400, Error{Msg: err.Error()})
+		}
 		return
 	}
 
