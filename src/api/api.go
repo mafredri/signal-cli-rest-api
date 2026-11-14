@@ -658,13 +658,19 @@ func wsPong(ws *websocket.Conn, stop chan struct{}) {
 		ws.Close()
 	}()
 
+	// Without a read deadline a peer that stopped answering stays attached
+	// until TCP gives up, and in manual receive mode keeps signal-cli
+	// receiving for it.
+	extendDeadline := func() error { return ws.SetReadDeadline(time.Now().Add(pongWait)) }
 	ws.SetReadLimit(512)
-	ws.SetPongHandler(func(string) error { log.Debug("Received pong"); return nil })
+	extendDeadline()
+	ws.SetPongHandler(func(string) error { log.Debug("Received pong"); return extendDeadline() })
 	for {
 		_, _, err := ws.ReadMessage()
 		if err != nil {
 			break
 		}
+		extendDeadline()
 	}
 }
 
