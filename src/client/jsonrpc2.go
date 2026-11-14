@@ -165,22 +165,25 @@ func (r *JsonRpc2Client) getRaw(command string, account *string, args interface{
 
 	log.Debug("json-rpc command: ", string(fullCommandBytes))
 
+	// Register before writing: the reader can observe a fast reply before
+	// Write returns. Buffer one response so write failure cleanup cannot leave
+	// the receiver blocked on a channel whose caller has already returned.
+	responseChan := make(chan JsonRpc2MessageResponse, 1)
+	r.receivedResponsesMutex.Lock()
+	r.receivedResponsesById[u.String()] = responseChan
+	r.receivedResponsesMutex.Unlock()
+	defer func() {
+		r.receivedResponsesMutex.Lock()
+		delete(r.receivedResponsesById, u.String())
+		r.receivedResponsesMutex.Unlock()
+	}()
+
 	_, err = r.conn.Write([]byte(string(fullCommandBytes) + "\n"))
 	if err != nil {
 		return "", err
 	}
 
-	responseChan := make(chan JsonRpc2MessageResponse)
-	r.receivedResponsesMutex.Lock()
-	r.receivedResponsesById[u.String()] = responseChan
-	r.receivedResponsesMutex.Unlock()
-
-	var resp JsonRpc2MessageResponse
-	resp = <-responseChan
-
-	r.receivedResponsesMutex.Lock()
-	delete(r.receivedResponsesById, u.String())
-	r.receivedResponsesMutex.Unlock()
+	resp := <-responseChan
 
 	log.Debug("json-rpc command response message: ", string(resp.Result))
 	log.Debug("json-rpc response error: ", string(resp.Err.Message))
