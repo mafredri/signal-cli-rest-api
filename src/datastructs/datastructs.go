@@ -22,6 +22,19 @@ func (s *MessageMention) ToString() string {
 	return fmt.Sprintf("%d:%d:%s", s.Start, s.Length, s.Author)
 }
 
+// MessageTextStyle styles a range of the message text, counted in UTF-16
+// code units like mentions. Style is BOLD, ITALIC, SPOILER, STRIKETHROUGH
+// or MONOSPACE.
+type MessageTextStyle struct {
+	Start  int64  `json:"start"`
+	Length int64  `json:"length"`
+	Style  string `json:"style" enums:"BOLD,ITALIC,SPOILER,STRIKETHROUGH,MONOSPACE"`
+}
+
+func (s *MessageTextStyle) ToString() string {
+	return fmt.Sprintf("%d:%d:%s", s.Start, s.Length, s.Style)
+}
+
 type SendMessageRecipient struct {
 	Identifier string `json:"identifier"`
 	Type       string `json:"type"`
@@ -47,6 +60,7 @@ type SignalCliSendRequest struct {
 	QuoteMessage      *string
 	QuoteMentions     []MessageMention
 	TextMode          *string
+	TextStyles        []MessageTextStyle
 	EditTimestamp     *int64
 	NotifySelf        *bool
 	LinkPreview       *LinkPreviewType
