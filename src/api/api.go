@@ -588,17 +588,22 @@ func (a *Api) SendV2(c *gin.Context) {
 }
 
 func (a *Api) handleSignalReceive(ws *websocket.Conn, number string, stop chan struct{}) {
+	// Closing the WebSocket on every return also ends the reads in wsPong,
+	// which would otherwise keep a WebSocket open that receives nothing.
+	defer ws.Close()
+
 	receiveChannel, channelUuid, err := a.signalClient.GetReceiveChannel(number)
 	if err != nil {
 		log.Error("Couldn't get receive channel: ", err.Error())
 		return
 	}
+	// Every return must release the channel: in manual receive mode it holds
+	// a reference on signal-cli's subscription.
+	defer a.signalClient.RemoveReceiveChannel(channelUuid)
 
 	for {
 		select {
 		case <-stop:
-			a.signalClient.RemoveReceiveChannel(channelUuid)
-			ws.Close()
 			return
 		case msg := <-receiveChannel:
 			var data string = string(msg.Params)
