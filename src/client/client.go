@@ -1920,8 +1920,18 @@ func (s *SignalClient) GetAttachment(attachment string) ([]byte, error) {
 }
 
 func (s *SignalClient) UpdateProfile(number string, profileName string, base64Avatar string, about *string) error {
+	return s.PatchProfile(number, &profileName, &base64Avatar, base64Avatar == "", about)
+}
+
+func (s *SignalClient) PatchProfile(number string, profileName *string, avatar *string, removeAvatar bool, about *string) error {
+	base64Avatar := ""
+	if avatar != nil {
+		base64Avatar = *avatar
+	}
+
 	var err error
 	var avatarTmpPath string
+	defer func() { cleanupTmpFiles([]string{avatarTmpPath}) }()
 	if base64Avatar != "" {
 		u, err := uuid.NewV4()
 		if err != nil {
@@ -1959,14 +1969,14 @@ func (s *SignalClient) UpdateProfile(number string, profileName string, base64Av
 
 	if s.signalCliMode == JsonRpc {
 		type Request struct {
-			Name         string  `json:"given-name"`
+			Name         *string `json:"given-name,omitempty"`
 			Avatar       string  `json:"avatar,omitempty"`
-			RemoveAvatar bool    `json:"remove-avatar"`
+			RemoveAvatar bool    `json:"remove-avatar,omitempty"`
 			About        *string `json:"about,omitempty"`
 		}
 		request := Request{Name: profileName}
 		request.About = about
-		if base64Avatar == "" {
+		if removeAvatar {
 			request.RemoveAvatar = true
 		} else {
 			request.Avatar = avatarTmpPath
@@ -1979,10 +1989,13 @@ func (s *SignalClient) UpdateProfile(number string, profileName string, base64Av
 		}
 		_, err = jsonRpc2Client.getRaw("updateProfile", &number, request)
 	} else {
-		cmd := []string{"--config", s.signalCliConfig, "-a", number, "updateProfile", "--given-name", profileName}
-		if base64Avatar == "" {
+		cmd := []string{"--config", s.signalCliConfig, "-a", number, "updateProfile"}
+		if profileName != nil {
+			cmd = append(cmd, "--given-name", *profileName)
+		}
+		if removeAvatar {
 			cmd = append(cmd, "--remove-avatar")
-		} else {
+		} else if base64Avatar != "" {
 			cmd = append(cmd, []string{"--avatar", avatarTmpPath}...)
 		}
 
@@ -2951,6 +2964,11 @@ func (s *SignalClient) ListContacts(number string, allRecipients bool, recipient
 		entry.Profile.LastUpdatedTimestamp = value.Profile.LastUpdateTimestamp
 		entry.Profile.GivenName = value.Profile.GivenName
 		entry.Profile.FamilyName = value.Profile.FamilyName
+		// Current signal-cli returns profile.givenName/familyName, without the
+		// historical profileName convenience property.
+		if entry.ProfileName == "" {
+			entry.ProfileName = strings.TrimSpace(strings.TrimSpace(value.Profile.GivenName) + " " + strings.TrimSpace(value.Profile.FamilyName))
+		}
 		entry.Nickname.Name = value.Nickname
 		entry.Nickname.GivenName = value.NickGivenName
 		entry.Nickname.FamilyName = value.NickFamilyName
