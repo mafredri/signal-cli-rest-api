@@ -247,6 +247,10 @@ func (r *JsonRpc2Client) ReceiveData(number string, receiveWebhookUrl string) {
 			}
 			connbuf = bufio.NewReader(r.conn)
 			log.Info("Successfully reconnected to signal-cli")
+			if r.jsonRpcReceiveMode == Manual {
+				// Runs concurrently: its requests need this loop to read the responses.
+				go r.resubscribeReceive()
+			}
 			continue
 		}
 		log.Debug("json-rpc received data: ", str)
@@ -372,6 +376,24 @@ func (r *JsonRpc2Client) releaseReceiveSubscription(account string) error {
 	}
 
 	return err
+}
+
+// resubscribeReceive renews the manual-mode subscriptions on a new connection
+// to signal-cli. signal-cli removes a connection's subscriptions when the
+// connection ends, while the WebSockets that hold them stay attached.
+func (r *JsonRpc2Client) resubscribeReceive() {
+	r.receiveSubscriptionsMutex.Lock()
+	defer r.receiveSubscriptionsMutex.Unlock()
+
+	for account, sub := range r.receiveSubscriptions {
+		id, err := r.subscribeReceive(account)
+		if err != nil {
+			log.Errorf("Couldn't renew subscription for account %s after reconnecting to signal-cli: %s", account, err.Error())
+			continue
+		}
+		sub.id = id
+		log.Debugf("Renewed receive subscription for account %s (subscription=%d)", account, id)
+	}
 }
 
 func (r *JsonRpc2Client) GetReceiveChannel(account string) (chan JsonRpc2ReceivedMessage, string, error) {
