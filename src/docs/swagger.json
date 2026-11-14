@@ -463,6 +463,12 @@
                     ],
                     "type": "string"
                 },
+                "text_styles": {
+                    "items": {
+                        "$ref": "#/definitions/data.MessageTextStyle"
+                    },
+                    "type": "array"
+                },
                 "view_once": {
                     "type": "boolean"
                 }
@@ -1109,6 +1115,32 @@
                 "author",
                 "length",
                 "start"
+            ],
+            "type": "object"
+        },
+        "data.MessageTextStyle": {
+            "properties": {
+                "length": {
+                    "type": "integer"
+                },
+                "start": {
+                    "type": "integer"
+                },
+                "style": {
+                    "enum": [
+                        "BOLD",
+                        "ITALIC",
+                        "SPOILER",
+                        "STRIKETHROUGH",
+                        "MONOSPACE"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "length",
+                "start",
+                "style"
             ],
             "type": "object"
         },
@@ -5153,7 +5185,7 @@
                 "consumes": [
                     "application/json"
                 ],
-                "description": "Send a signal message. Set the text_mode to 'styled' in case you want to add formatting to your text message. Styling Options: \\*italic text\\*, \\*\\*bold text\\*\\*, ~strikethrough text~, ||spoiler||, \\`monospace\\`. If you want to escape a formatting character, prefix it with two backslashes.",
+                "description": "Send a signal message. Set the text_mode to 'styled' in case you want to add formatting to your text message. Styling Options: \\*italic text\\*, \\*\\*bold text\\*\\*, ~strikethrough text~, ||spoiler||, \\`monospace\\`. If you want to escape a formatting character, prefix it with two backslashes. Alternatively, set text_styles to style ranges of the unmodified text, counted in UTF-16 code units like mentions; text_styles cannot be combined with the styled text_mode.",
                 "parameters": [
                     {
                         "description": "Input Data",
