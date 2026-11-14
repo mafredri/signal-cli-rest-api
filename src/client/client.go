@@ -1902,21 +1902,34 @@ func (s *SignalClient) RemoveAttachment(attachment string) error {
 }
 
 func (s *SignalClient) GetAttachment(attachment string) ([]byte, error) {
+	file, err := s.OpenAttachment(attachment)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return ioutil.ReadAll(file)
+}
+
+// OpenAttachment keeps byte serving independent of mode and bounded by the
+// caller's stream/range. SecureJoin retains the existing attachment root.
+func (s *SignalClient) OpenAttachment(attachment string) (*os.File, error) {
 	path, err := securejoin.SecureJoin(s.signalCliConfig+"/attachments/", attachment)
 	if err != nil {
-		return []byte{}, &InvalidNameError{Description: "Please provide a valid attachment name"}
+		return nil, &InvalidNameError{Description: "Please provide a valid attachment name"}
 	}
-
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return []byte{}, &NotFoundError{Description: "No attachment with that name found"}
+	file, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return nil, &NotFoundError{Description: "No attachment with that name found"}
 	}
-
-	attachmentBytes, err := ioutil.ReadFile(path)
 	if err != nil {
-		return []byte{}, &InternalError{Description: "Couldn't read attachment - please try again later"}
+		return nil, &InternalError{Description: "Couldn't read attachment - please try again later"}
 	}
-
-	return attachmentBytes, nil
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		file.Close()
+		return nil, &InvalidNameError{Description: "Attachment must be a regular file"}
+	}
+	return file, nil
 }
 
 func (s *SignalClient) UpdateProfile(number string, profileName string, base64Avatar string, about *string) error {
