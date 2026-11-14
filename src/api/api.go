@@ -593,11 +593,13 @@ func (a *Api) handleSignalReceive(ws *websocket.Conn, number string, stop chan s
 		log.Error("Couldn't get receive channel: ", err.Error())
 		return
 	}
+	// Every return must release the channel: in manual receive mode it holds
+	// a reference on signal-cli's subscription.
+	defer a.signalClient.RemoveReceiveChannel(channelUuid)
 
 	for {
 		select {
 		case <-stop:
-			a.signalClient.RemoveReceiveChannel(channelUuid)
 			ws.Close()
 			return
 		case msg := <-receiveChannel:
