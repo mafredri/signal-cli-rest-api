@@ -65,10 +65,61 @@ type receiveSubscription struct {
 	refcount int
 }
 
+// receiveQueue delivers notifications to one receive channel in order and
+// without bound. signal-cli has already acknowledged each message to the Signal
+// server, so dropping one loses it, and blocking the read loop on one slow
+// channel would also stall every JSON-RPC response, including the
+// subscribeReceive response a newly registered channel may be waiting for.
+type receiveQueue struct {
+	mu      sync.Mutex
+	pending []JsonRpc2ReceivedMessage
+	wake    chan struct{}
+	done    chan struct{}
+}
+
+func newReceiveQueue(out chan<- JsonRpc2ReceivedMessage) *receiveQueue {
+	q := &receiveQueue{wake: make(chan struct{}, 1), done: make(chan struct{})}
+	go q.pump(out)
+	return q
+}
+
+func (q *receiveQueue) push(msg JsonRpc2ReceivedMessage) {
+	q.mu.Lock()
+	q.pending = append(q.pending, msg)
+	q.mu.Unlock()
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (q *receiveQueue) pump(out chan<- JsonRpc2ReceivedMessage) {
+	for {
+		q.mu.Lock()
+		batch := q.pending
+		q.pending = nil
+		q.mu.Unlock()
+		for _, msg := range batch {
+			select {
+			case out <- msg:
+			case <-q.done:
+				return
+			}
+		}
+		select {
+		case <-q.wake:
+		case <-q.done:
+			return
+		}
+	}
+}
+
+func (q *receiveQueue) close() { close(q.done) }
+
 type JsonRpc2Client struct {
 	conn                      net.Conn
 	receivedResponsesById     map[string]chan JsonRpc2MessageResponse
-	receivedMessagesChannels  map[string]chan JsonRpc2ReceivedMessage
+	receiveQueues             map[string]*receiveQueue
 	receiveSubscriptions      map[string]*receiveSubscription
 	accountsByChannelUuid     map[string]string
 	signalCliApiConfig        *utils.SignalCliApiConfig
@@ -82,13 +133,13 @@ type JsonRpc2Client struct {
 
 func NewJsonRpc2Client(signalCliApiConfig *utils.SignalCliApiConfig, number string, jsonRpcReceiveMode JsonRpcReceiveMode) *JsonRpc2Client {
 	return &JsonRpc2Client{
-		signalCliApiConfig:       signalCliApiConfig,
-		number:                   number,
-		jsonRpcReceiveMode:       jsonRpcReceiveMode,
-		receivedResponsesById:    make(map[string]chan JsonRpc2MessageResponse),
-		receivedMessagesChannels: make(map[string]chan JsonRpc2ReceivedMessage),
-		receiveSubscriptions:     make(map[string]*receiveSubscription),
-		accountsByChannelUuid:    make(map[string]string),
+		signalCliApiConfig:    signalCliApiConfig,
+		number:                number,
+		jsonRpcReceiveMode:    jsonRpcReceiveMode,
+		receivedResponsesById: make(map[string]chan JsonRpc2MessageResponse),
+		receiveQueues:         make(map[string]*receiveQueue),
+		receiveSubscriptions:  make(map[string]*receiveSubscription),
+		accountsByChannelUuid: make(map[string]string),
 	}
 }
 
@@ -273,13 +324,8 @@ func (r *JsonRpc2Client) ReceiveData(number string, receiveWebhookUrl string) {
 			}
 
 			r.receivedMessagesMutex.Lock()
-			for _, c := range r.receivedMessagesChannels {
-				select {
-				case c <- resp1:
-					log.Debug("Message sent to golang channel")
-				default:
-					log.Debug("Couldn't send message to golang channel, as there's no receiver")
-				}
+			for _, q := range r.receiveQueues {
+				q.push(resp1)
 			}
 			r.receivedMessagesMutex.Unlock()
 
@@ -389,14 +435,15 @@ func (r *JsonRpc2Client) GetReceiveChannel(account string) (chan JsonRpc2Receive
 	// subscribeReceive and can send the queued messages before its response,
 	// or before this goroutine runs again after the response.
 	r.receivedMessagesMutex.Lock()
-	r.receivedMessagesChannels[channelUuid.String()] = c
+	r.receiveQueues[channelUuid.String()] = newReceiveQueue(c)
 	r.accountsByChannelUuid[channelUuid.String()] = account
 	r.receivedMessagesMutex.Unlock()
 
 	if r.jsonRpcReceiveMode == Manual {
 		if err := r.acquireReceiveSubscription(account); err != nil {
 			r.receivedMessagesMutex.Lock()
-			delete(r.receivedMessagesChannels, channelUuid.String())
+			r.receiveQueues[channelUuid.String()].close()
+			delete(r.receiveQueues, channelUuid.String())
 			delete(r.accountsByChannelUuid, channelUuid.String())
 			r.receivedMessagesMutex.Unlock()
 			return c, "", fmt.Errorf("Couldn't create subscription for account %s: %w", account, err)
@@ -408,7 +455,10 @@ func (r *JsonRpc2Client) GetReceiveChannel(account string) (chan JsonRpc2Receive
 
 func (r *JsonRpc2Client) RemoveReceiveChannel(channelUuid string) {
 	r.receivedMessagesMutex.Lock()
-	delete(r.receivedMessagesChannels, channelUuid)
+	if q, ok := r.receiveQueues[channelUuid]; ok {
+		q.close()
+		delete(r.receiveQueues, channelUuid)
+	}
 	account := r.accountsByChannelUuid[channelUuid]
 	delete(r.accountsByChannelUuid, channelUuid)
 	r.receivedMessagesMutex.Unlock()
