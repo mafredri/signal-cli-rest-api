@@ -385,16 +385,23 @@ func (r *JsonRpc2Client) GetReceiveChannel(account string) (chan JsonRpc2Receive
 		return c, "", err
 	}
 
-	if r.jsonRpcReceiveMode == Manual {
-		if err := r.acquireReceiveSubscription(account); err != nil {
-			return c, "", fmt.Errorf("Couldn't create subscription for account %s: %w", account, err)
-		}
-	}
-
+	// Register before subscribing: signal-cli starts receiving when it handles
+	// subscribeReceive and can send the queued messages before its response,
+	// or before this goroutine runs again after the response.
 	r.receivedMessagesMutex.Lock()
 	r.receivedMessagesChannels[channelUuid.String()] = c
 	r.accountsByChannelUuid[channelUuid.String()] = account
 	r.receivedMessagesMutex.Unlock()
+
+	if r.jsonRpcReceiveMode == Manual {
+		if err := r.acquireReceiveSubscription(account); err != nil {
+			r.receivedMessagesMutex.Lock()
+			delete(r.receivedMessagesChannels, channelUuid.String())
+			delete(r.accountsByChannelUuid, channelUuid.String())
+			r.receivedMessagesMutex.Unlock()
+			return c, "", fmt.Errorf("Couldn't create subscription for account %s: %w", account, err)
+		}
+	}
 
 	return c, channelUuid.String(), nil
 }
