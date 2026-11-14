@@ -274,6 +274,7 @@ func main() {
 			attachments.GET("", api.GetAttachments)
 			attachments.DELETE(":attachment", api.RemoveAttachment)
 			attachments.GET(":attachment", api.ServeAttachment)
+			attachments.HEAD(":attachment", api.ServeAttachment)
 		}
 
 		stickerPacks := v1.Group("sticker-packs")

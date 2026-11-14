@@ -1448,16 +1448,19 @@ func (a *Api) RemoveAttachment(c *gin.Context) {
 
 // @Summary Serve Attachment.
 // @Tags Attachments
-// @Description Serve the attachment with the given id
-// @Produce  json
-// @Success 200 {string} OK
+// @Description Stream the attachment with the given id. Supports HTTP byte ranges and conditional requests.
+// @Produce application/octet-stream
+// @Success 200 {file} binary
+// @Success 206 {file} binary
+// @Failure 416 {string} string
+// @Param Range header string false "HTTP byte range"
 // @Failure 400 {object} Error
 // @Param attachment path string true "Attachment ID"
 // @Router /v1/attachments/{attachment} [get]
 func (a *Api) ServeAttachment(c *gin.Context) {
 	attachment := c.Param("attachment")
 
-	attachmentBytes, err := a.signalClient.GetAttachment(attachment)
+	file, err := a.signalClient.OpenAttachment(attachment)
 	if err != nil {
 		switch err.(type) {
 		case *client.InvalidNameError:
@@ -1475,19 +1478,15 @@ func (a *Api) ServeAttachment(c *gin.Context) {
 		}
 	}
 
-	mime, err := mimetype.DetectReader(bytes.NewReader(attachmentBytes))
+	defer file.Close()
+	info, err := file.Stat()
 	if err != nil {
-		c.JSON(500, Error{Msg: "Couldn't detect MIME type for attachment"})
+		c.JSON(500, Error{Msg: "Couldn't inspect attachment"})
 		return
 	}
-
-	c.Writer.Header().Set("Content-Type", mime.String())
-	c.Writer.Header().Set("Content-Length", strconv.Itoa(len(attachmentBytes)))
-	_, err = c.Writer.Write(attachmentBytes)
-	if err != nil {
-		c.JSON(500, Error{Msg: "Couldn't serve attachment - please try again later"})
-		return
-	}
+	// ServeContent handles bounded streaming, byte ranges, HEAD and conditional
+	// requests, and detects MIME without loading the complete attachment.
+	http.ServeContent(c.Writer, c.Request, attachment, info.ModTime(), file)
 }
 
 // @Summary Update Profile.
