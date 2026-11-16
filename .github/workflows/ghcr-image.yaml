@@ -1,0 +1,61 @@
+name: GHCR image
+
+# Publishes this fork's develop branch to GHCR, with signal-cli's Java
+# distribution built from the develop branch of the mafredri/signal-cli fork.
+# Upstream's release workflows publish to Docker Hub and need its secrets.
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+
+jobs:
+  image:
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+      SIGNAL_CLI_REPOSITORY: https://github.com/mafredri/signal-cli.git
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # amd64 only: the Go build stage runs on the target platform, so arm64
+      # would need emulation.
+      - name: Build
+        run: |
+          set -euo pipefail
+          signal_cli=$(git ls-remote "$SIGNAL_CLI_REPOSITORY" refs/heads/develop | cut -f1)
+          if [[ -z "$signal_cli" ]]; then
+            echo "signal-cli develop not found at $SIGNAL_CLI_REPOSITORY" >&2
+            exit 1
+          fi
+          docker build --tag "$IMAGE:ci" \
+            --label org.opencontainers.image.source="https://github.com/$GITHUB_REPOSITORY" \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            --label signal-cli.revision="$signal_cli" \
+            --build-arg BUILD_VERSION_ARG="develop-${GITHUB_SHA::7}" \
+            --build-arg SIGNAL_CLI_SOURCE="$SIGNAL_CLI_REPOSITORY#$signal_cli" \
+            .
+      - name: Run signal-cli
+        run: docker run --rm --entrypoint signal-cli "$IMAGE:ci" --version
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push
+        run: |
+          for tag in develop "sha-${GITHUB_SHA::7}"; do
+            docker tag "$IMAGE:ci" "$IMAGE:$tag"
+            docker push "$IMAGE:$tag"
+          done
