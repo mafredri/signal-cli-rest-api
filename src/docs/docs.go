@@ -3272,6 +3272,13 @@ const docTemplate = `{
                         "name": "number",
                         "required": true,
                         "type": "string"
+                    },
+                    {
+                        "description": "Contact UUID",
+                        "in": "path",
+                        "name": "uuid",
+                        "required": true,
+                        "type": "string"
                     }
                 ],
                 "produces": [
@@ -3282,6 +3289,18 @@ const docTemplate = `{
                         "description": "Image",
                         "schema": {
                             "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Error"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Error"
                         }
                     }
                 },
