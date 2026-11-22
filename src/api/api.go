@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -1448,16 +1449,21 @@ func (a *Api) RemoveAttachment(c *gin.Context) {
 
 // @Summary Serve Attachment.
 // @Tags Attachments
-// @Description Serve the attachment with the given id
-// @Produce  json
-// @Success 200 {string} OK
+// @Description Stream the attachment with the given id. Supports HTTP byte ranges (Range, If-Range) and conditional requests on its modification time (If-Modified-Since, If-Unmodified-Since).
+// @Produce application/octet-stream
+// @Success 200 {file} binary
+// @Success 206 {file} binary
 // @Failure 400 {object} Error
+// @Failure 404 {object} Error
+// @Failure 416 {string} string
 // @Param attachment path string true "Attachment ID"
+// @Param Range header string false "HTTP byte range"
 // @Router /v1/attachments/{attachment} [get]
+// @Router /v1/attachments/{attachment} [head]
 func (a *Api) ServeAttachment(c *gin.Context) {
 	attachment := c.Param("attachment")
 
-	attachmentBytes, err := a.signalClient.GetAttachment(attachment)
+	file, info, err := a.signalClient.OpenAttachment(attachment)
 	if err != nil {
 		switch err.(type) {
 		case *client.InvalidNameError:
@@ -1474,20 +1480,29 @@ func (a *Api) ServeAttachment(c *gin.Context) {
 			return
 		}
 	}
+	defer file.Close()
 
-	mime, err := mimetype.DetectReader(bytes.NewReader(attachmentBytes))
+	// Detect the type from the content, as before, rather than from the file
+	// name: signal-cli names stored attachments after the sender's file name.
+	// DetectReader reads only the first few kilobytes.
+	mime, err := mimetype.DetectReader(file)
 	if err != nil {
 		c.JSON(500, Error{Msg: "Couldn't detect MIME type for attachment"})
 		return
 	}
-
-	c.Writer.Header().Set("Content-Type", mime.String())
-	c.Writer.Header().Set("Content-Length", strconv.Itoa(len(attachmentBytes)))
-	_, err = c.Writer.Write(attachmentBytes)
-	if err != nil {
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		c.JSON(500, Error{Msg: "Couldn't serve attachment - please try again later"})
 		return
 	}
+	c.Writer.Header().Set("Content-Type", mime.String())
+	request := c.Request
+	if request.Method == http.MethodHead && request.Header.Get("Range") != "" {
+		// A server ignores Range for HEAD (RFC 9110, section 14.2), which
+		// ServeContent does not.
+		request = request.Clone(request.Context())
+		request.Header.Del("Range")
+	}
+	http.ServeContent(c.Writer, request, attachment, info.ModTime(), file)
 }
 
 // @Summary Update Profile.

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1908,21 +1908,34 @@ func (s *SignalClient) RemoveAttachment(attachment string) error {
 }
 
 func (s *SignalClient) GetAttachment(attachment string) ([]byte, error) {
+	file, _, err := s.OpenAttachment(attachment)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return io.ReadAll(file)
+}
+
+// OpenAttachment opens a stored attachment for streaming. The caller closes
+// the file.
+func (s *SignalClient) OpenAttachment(attachment string) (*os.File, os.FileInfo, error) {
 	path, err := securejoin.SecureJoin(s.signalCliConfig+"/attachments/", attachment)
 	if err != nil {
-		return []byte{}, &InvalidNameError{Description: "Please provide a valid attachment name"}
+		return nil, nil, &InvalidNameError{Description: "Please provide a valid attachment name"}
 	}
-
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return []byte{}, &NotFoundError{Description: "No attachment with that name found"}
+	file, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return nil, nil, &NotFoundError{Description: "No attachment with that name found"}
 	}
-
-	attachmentBytes, err := ioutil.ReadFile(path)
 	if err != nil {
-		return []byte{}, &InternalError{Description: "Couldn't read attachment - please try again later"}
+		return nil, nil, &InternalError{Description: "Couldn't read attachment - please try again later"}
 	}
-
-	return attachmentBytes, nil
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		file.Close()
+		return nil, nil, &InvalidNameError{Description: "Attachment must be a regular file"}
+	}
+	return file, info, nil
 }
 
 func (s *SignalClient) UpdateProfile(number string, profileName string, base64Avatar string, about *string) error {
