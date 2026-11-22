@@ -112,6 +112,17 @@ func (f *apiFakeCli) notify(t *testing.T, timestamp int64) {
 
 func startManualAPI(t *testing.T) (*apiFakeCli, string) {
 	t.Helper()
+	return startManualAPIWith(t, nil)
+}
+
+// startManualAPIWith calls configure, if not nil, on the Api before serving.
+func startManualAPIWith(t *testing.T, configure func(*Api)) (*apiFakeCli, string) {
+	t.Helper()
+	return startAPI(t, client.Manual, configure)
+}
+
+func startAPI(t *testing.T, mode client.JsonRpcReceiveMode, configure func(*Api)) (*apiFakeCli, string) {
+	t.Helper()
 	f := newAPIFakeCli(t)
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "jsonrpc2.yml")
@@ -119,11 +130,14 @@ func startManualAPI(t *testing.T) (*apiFakeCli, string) {
 	if err := os.WriteFile(cfg, []byte(fmt.Sprintf("config:\n  \"<multi-account>\":\n    tcp_port: %d\n", port)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	sc := client.NewSignalClient(dir, dir, dir, client.JsonRpc, cfg, filepath.Join(dir, "api.yml"), "", client.Manual)
+	sc := client.NewSignalClient(dir, dir, dir, client.JsonRpc, cfg, filepath.Join(dir, "api.yml"), "", mode)
 	if err := sc.Init(1); err != nil {
 		t.Fatal(err)
 	}
 	api := NewApi(sc)
+	if configure != nil {
+		configure(api)
+	}
 	router := gin.New()
 	router.GET("/v1/receive/:number", api.Receive)
 	// Runs only handleSignalReceive, without the goroutines that read and
