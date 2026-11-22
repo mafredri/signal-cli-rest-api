@@ -627,7 +627,12 @@ func (a *Api) handleSignalReceive(ws *websocket.Conn, number string, stop chan s
 		select {
 		case <-stop:
 			return
-		case msg := <-receiveChannel:
+		case msg, ok := <-receiveChannel:
+			if !ok {
+				// The wrapper can no longer receive for the account; the
+				// client reconnects to subscribe again.
+				return
+			}
 			var data string = string(msg.Params)
 			var err error = nil
 			if msg.Err.Code != 0 {

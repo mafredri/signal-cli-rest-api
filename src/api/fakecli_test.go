@@ -26,13 +26,17 @@ const apiLossAccount = "+15550000001"
 type apiCliRequest struct {
 	Method string `json:"method"`
 	Id     string `json:"id"`
+	conn   net.Conn
 }
 
-// apiFakeCli imitates signal-cli's JSON-RPC TCP socket for one connection.
+// apiFakeCli imitates signal-cli's JSON-RPC TCP socket. It accepts every
+// connection: the wrapper's shared one and, in manual receive mode, one per
+// subscribed account. Notifications go to the connection of the latest
+// subscribeReceive.
 type apiFakeCli struct {
 	ln       net.Listener
 	mu       sync.Mutex
-	conn     net.Conn
+	receive  net.Conn
 	requests chan apiCliRequest
 }
 
@@ -47,34 +51,41 @@ func newAPIFakeCli(t *testing.T) *apiFakeCli {
 	t.Cleanup(func() { ln.Close() })
 	f := &apiFakeCli{ln: ln, requests: make(chan apiCliRequest, 1024)}
 	go func() {
-		c, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		f.mu.Lock()
-		f.conn = c
-		f.mu.Unlock()
-		r := bufio.NewReader(c)
 		for {
-			line, err := r.ReadBytes('\n')
+			c, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			var req apiCliRequest
-			if json.Unmarshal(line, &req) == nil {
-				f.requests <- req
-			}
+			go func() {
+				r := bufio.NewReader(c)
+				for {
+					line, err := r.ReadBytes('\n')
+					if err != nil {
+						return
+					}
+					var req apiCliRequest
+					if json.Unmarshal(line, &req) == nil {
+						req.conn = c
+						if req.Method == "subscribeReceive" {
+							f.mu.Lock()
+							f.receive = c
+							f.mu.Unlock()
+						}
+						f.requests <- req
+					}
+				}
+			}()
 		}
 	}()
 	return f
 }
 
-func (f *apiFakeCli) write(t *testing.T, v any) {
+func (f *apiFakeCli) writeTo(t *testing.T, conn net.Conn, v any) {
 	t.Helper()
 	b, _ := json.Marshal(v)
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if _, err := f.conn.Write(append(b, '\n')); err != nil {
+	if _, err := conn.Write(append(b, '\n')); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -95,17 +106,20 @@ func (f *apiFakeCli) next(method string, d time.Duration) (apiCliRequest, bool) 
 
 func (f *apiFakeCli) respond(t *testing.T, req apiCliRequest, result any) {
 	t.Helper()
-	f.write(t, map[string]any{"jsonrpc": "2.0", "id": req.Id, "result": result})
+	f.writeTo(t, req.conn, map[string]any{"jsonrpc": "2.0", "id": req.Id, "result": result})
 }
 
 func (f *apiFakeCli) respondError(t *testing.T, req apiCliRequest, code int, message string) {
 	t.Helper()
-	f.write(t, map[string]any{"jsonrpc": "2.0", "id": req.Id, "error": map[string]any{"code": code, "message": message}})
+	f.writeTo(t, req.conn, map[string]any{"jsonrpc": "2.0", "id": req.Id, "error": map[string]any{"code": code, "message": message}})
 }
 
 func (f *apiFakeCli) notify(t *testing.T, timestamp int64) {
 	t.Helper()
-	f.write(t, map[string]any{"jsonrpc": "2.0", "method": "receive", "params": map[string]any{"subscription": 0, "result": map[string]any{
+	f.mu.Lock()
+	conn := f.receive
+	f.mu.Unlock()
+	f.writeTo(t, conn, map[string]any{"jsonrpc": "2.0", "method": "receive", "params": map[string]any{"subscription": 0, "result": map[string]any{
 		"account": apiLossAccount, "envelope": map[string]any{"timestamp": timestamp, "dataMessage": map[string]any{"message": strings.Repeat("x", 512)}},
 	}}})
 }

@@ -3,6 +3,7 @@ package client
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,27 +58,22 @@ func (r *RateLimitErrorType) Error() string {
 	return r.Err.Error()
 }
 
-// receiveSubscription tracks the state of a manual-mode signal-cli
-// subscribeReceive call: the subscription id assigned by signal-cli and
-// a refcount of websocket subscribers attached to that account.
-type receiveSubscription struct {
-	id       int64
-	refcount int
-}
-
 type JsonRpc2Client struct {
-	conn                      net.Conn
-	receivedResponsesById     map[string]chan JsonRpc2MessageResponse
-	receivedMessagesChannels  map[string]chan JsonRpc2ReceivedMessage
-	receiveSubscriptions      map[string]*receiveSubscription
-	accountsByChannelUuid     map[string]string
-	signalCliApiConfig        *utils.SignalCliApiConfig
-	number                    string
-	jsonRpcReceiveMode        JsonRpcReceiveMode
-	receivedMessagesMutex     sync.Mutex
-	receivedResponsesMutex    sync.Mutex
-	receiveSubscriptionsMutex sync.Mutex
-	address                   string
+	conn                     net.Conn
+	receivedResponsesById    map[string]chan JsonRpc2MessageResponse
+	receivedMessagesChannels map[string]chan JsonRpc2ReceivedMessage
+	signalCliApiConfig       *utils.SignalCliApiConfig
+	number                   string
+	jsonRpcReceiveMode       JsonRpcReceiveMode
+	receivedMessagesMutex    sync.Mutex
+	receivedResponsesMutex   sync.Mutex
+	// In manual receive mode each account with attached receive channels
+	// has a manualReceiver; manualChannels maps a channel id to it.
+	manualReceivers   map[string]*manualReceiver
+	manualChannels    map[string]*manualReceiver
+	manualMutex       sync.Mutex
+	receiveWebhookUrl string
+	address           string
 }
 
 func NewJsonRpc2Client(signalCliApiConfig *utils.SignalCliApiConfig, number string, jsonRpcReceiveMode JsonRpcReceiveMode) *JsonRpc2Client {
@@ -87,14 +83,22 @@ func NewJsonRpc2Client(signalCliApiConfig *utils.SignalCliApiConfig, number stri
 		jsonRpcReceiveMode:       jsonRpcReceiveMode,
 		receivedResponsesById:    make(map[string]chan JsonRpc2MessageResponse),
 		receivedMessagesChannels: make(map[string]chan JsonRpc2ReceivedMessage),
-		receiveSubscriptions:     make(map[string]*receiveSubscription),
-		accountsByChannelUuid:    make(map[string]string),
+		manualReceivers:          make(map[string]*manualReceiver),
+		manualChannels:           make(map[string]*manualReceiver),
 	}
 }
 
+// Dial connects to signal-cli at address. The address is set only here,
+// before the client is used: manual receivers read it to open their own
+// connections while ReceiveData reconnects.
 func (r *JsonRpc2Client) Dial(address string, maxRetries int) error {
-	var err error
 	r.address = address
+	return r.dial(maxRetries)
+}
+
+func (r *JsonRpc2Client) dial(maxRetries int) error {
+	var err error
+	address := r.address
 	connected := false
 	for i := 0; i < maxRetries; i++ {
 		r.conn, err = net.Dial("tcp", address)
@@ -215,7 +219,11 @@ func (r *JsonRpc2Client) getRaw(command string, account *string, args interface{
 }
 
 func postMessageToWebhook(webhookUrl string, data []byte) error {
-	r, err := http.NewRequest("POST", webhookUrl, bytes.NewBuffer(data))
+	return postMessageToWebhookContext(context.Background(), webhookUrl, data)
+}
+
+func postMessageToWebhookContext(ctx context.Context, webhookUrl string, data []byte) error {
+	r, err := http.NewRequestWithContext(ctx, "POST", webhookUrl, bytes.NewBuffer(data))
 	if err != nil {
 		return err
 	}
@@ -244,7 +252,7 @@ func (r *JsonRpc2Client) ReceiveData(number string, receiveWebhookUrl string) {
 		if err != nil {
 			log.Error("Lost connection to signal-cli...attempting to reconnect (", err.Error(), ")")
 			r.conn.Close()
-			err = r.Dial(r.address, 15)
+			err = r.dial(15)
 			if err != nil {
 				log.Fatal("Unable to reconnect to signal-cli: ", err.Error(), "...aborting")
 			}
@@ -257,21 +265,6 @@ func (r *JsonRpc2Client) ReceiveData(number string, receiveWebhookUrl string) {
 		var resp1 JsonRpc2ReceivedMessage
 		json.Unmarshal([]byte(str), &resp1)
 		if resp1.Method == "receive" {
-			// In manual receive-mode signal-cli wraps the envelope in
-			// {"subscription":N,"result":{...}}; in auto mode it sends
-			// the envelope directly. Unwrap so the broadcast format is
-			// the same in both modes and downstream consumers (e.g. the
-			// websocket handler) don't have to know which mode is in use.
-			if r.jsonRpcReceiveMode == Manual {
-				var manualWrapper struct {
-					Subscription int64           `json:"subscription"`
-					Result       json.RawMessage `json:"result"`
-				}
-				if err := json.Unmarshal(resp1.Params, &manualWrapper); err == nil && len(manualWrapper.Result) > 0 {
-					resp1.Params = manualWrapper.Result
-				}
-			}
-
 			r.receivedMessagesMutex.Lock()
 			for _, c := range r.receivedMessagesChannels {
 				select {
@@ -311,76 +304,28 @@ func (r *JsonRpc2Client) ReceiveData(number string, receiveWebhookUrl string) {
 	}
 }
 
-func (r *JsonRpc2Client) subscribeReceive(account string) (int64, error) {
-	type subscribeReceiveArgs struct{}
-	resultStr, err := r.getRaw("subscribeReceive", &account, subscribeReceiveArgs{})
-	if err != nil {
-		return 0, err
-	}
-	var subscriptionId int64
-	if err := json.Unmarshal([]byte(resultStr), &subscriptionId); err != nil {
-		return 0, err
-	}
-	return subscriptionId, nil
-}
-
-func (r *JsonRpc2Client) unsubscribeReceive(account string, subscriptionId int64) error {
-	type unsubscribeReceiveArgs struct {
-		Subscription int64 `json:"subscription"`
-	}
-	_, err := r.getRaw("unsubscribeReceive", &account, unsubscribeReceiveArgs{Subscription: subscriptionId})
-	return err
-}
-
-func (r *JsonRpc2Client) acquireReceiveSubscription(account string) error {
-	r.receiveSubscriptionsMutex.Lock()
-	defer r.receiveSubscriptionsMutex.Unlock()
-
-	if sub, ok := r.receiveSubscriptions[account]; ok {
-		sub.refcount++
-		return nil
-	}
-
-	id, err := r.subscribeReceive(account)
-	if err != nil {
-		return err
-	}
-
-	r.receiveSubscriptions[account] = &receiveSubscription{id: id, refcount: 1}
-	log.Debugf("Subscribed to receive notifications for account %s (subscription=%d)", account, id)
-	return nil
-}
-
-func (r *JsonRpc2Client) releaseReceiveSubscription(account string) error {
-	r.receiveSubscriptionsMutex.Lock()
-
-	sub, ok := r.receiveSubscriptions[account]
-	if !ok {
-		r.receiveSubscriptionsMutex.Unlock()
-		return nil
-	}
-
-	sub.refcount--
-	if sub.refcount > 0 {
-		r.receiveSubscriptionsMutex.Unlock()
-		return nil
-	}
-
-	delete(r.receiveSubscriptions, account)
-	err := r.unsubscribeReceive(account, sub.id)
-
-	r.receiveSubscriptionsMutex.Unlock()
-
-	if err != nil {
-		log.Warnf("Couldn't unsubscribed from receive notifications for account %s (subscription=%d): %s", account, sub.id, err.Error())
-	} else {
-		log.Debugf("Unsubscribed from receive notifications for account %s (subscription=%d)", account, sub.id)
-	}
-
-	return err
-}
-
+// GetReceiveChannel returns a channel for the account's messages and its id
+// for RemoveReceiveChannel. In manual receive mode the channel is closed
+// when the wrapper can no longer receive for the account.
 func (r *JsonRpc2Client) GetReceiveChannel(account string) (chan JsonRpc2ReceivedMessage, string, error) {
+	if r.jsonRpcReceiveMode == Manual {
+		r.manualMutex.Lock()
+		receiver, ok := r.manualReceivers[account]
+		if !ok {
+			receiver = newManualReceiver(r.address, account, r.receiveWebhookUrl)
+			r.manualReceivers[account] = receiver
+		}
+		r.manualMutex.Unlock()
+		c, id, err := receiver.attach()
+		if err != nil {
+			return nil, "", fmt.Errorf("Couldn't create subscription for account %s: %w", account, err)
+		}
+		r.manualMutex.Lock()
+		r.manualChannels[id] = receiver
+		r.manualMutex.Unlock()
+		return c, id, nil
+	}
+
 	c := make(chan JsonRpc2ReceivedMessage, 64)
 
 	channelUuid, err := uuid.NewV4()
@@ -388,30 +333,26 @@ func (r *JsonRpc2Client) GetReceiveChannel(account string) (chan JsonRpc2Receive
 		return c, "", err
 	}
 
-	if r.jsonRpcReceiveMode == Manual {
-		if err := r.acquireReceiveSubscription(account); err != nil {
-			return c, "", fmt.Errorf("Couldn't create subscription for account %s: %w", account, err)
-		}
-	}
-
 	r.receivedMessagesMutex.Lock()
 	r.receivedMessagesChannels[channelUuid.String()] = c
-	r.accountsByChannelUuid[channelUuid.String()] = account
 	r.receivedMessagesMutex.Unlock()
 
 	return c, channelUuid.String(), nil
 }
 
 func (r *JsonRpc2Client) RemoveReceiveChannel(channelUuid string) {
+	if r.jsonRpcReceiveMode == Manual {
+		r.manualMutex.Lock()
+		receiver, ok := r.manualChannels[channelUuid]
+		delete(r.manualChannels, channelUuid)
+		r.manualMutex.Unlock()
+		if ok {
+			receiver.detach(channelUuid)
+		}
+		return
+	}
+
 	r.receivedMessagesMutex.Lock()
 	delete(r.receivedMessagesChannels, channelUuid)
-	account := r.accountsByChannelUuid[channelUuid]
-	delete(r.accountsByChannelUuid, channelUuid)
 	r.receivedMessagesMutex.Unlock()
-
-	if r.jsonRpcReceiveMode == Manual {
-		if err := r.releaseReceiveSubscription(account); err != nil {
-			log.Errorf("Couldn't release subscription for account %s: %s", account, err.Error())
-		}
-	}
 }
