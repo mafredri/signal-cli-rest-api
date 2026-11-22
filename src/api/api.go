@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gabriel-vasile/mimetype"
@@ -22,14 +21,11 @@ import (
 )
 
 const (
-	// Time allowed to write the file to the client.
+	// Time allowed to write a ping to the client.
 	writeWait = 10 * time.Second
 
-	// Time allowed to read the next pong message from the client.
-	pongWait = 60 * time.Second
-
-	// Send pings to client with this period. Must be less than pongWait.
-	pingPeriod = (pongWait * 9) / 10
+	// Default time allowed to read the next pong message from the client.
+	defaultPongWait = 60 * time.Second
 )
 
 type UpdateContactRequest struct {
@@ -261,13 +257,27 @@ type ClosePollRequest struct {
 
 type Api struct {
 	signalClient *client.SignalClient
-	wsMutex      sync.Mutex
+	// pongWait is how long a receive WebSocket may go without answering the
+	// pings sent every pingPeriod before it is closed; 0 keeps it open.
+	pongWait   time.Duration
+	pingPeriod time.Duration
 }
 
 func NewApi(signalClient *client.SignalClient) *Api {
-	return &Api{
-		signalClient: signalClient,
+	a := &Api{signalClient: signalClient}
+	a.SetWebSocketPongTimeout(defaultPongWait)
+	return a
+}
+
+// SetWebSocketPongTimeout sets how long a receive WebSocket may go without
+// answering a ping before it is closed. 0 keeps such WebSockets open.
+func (a *Api) SetWebSocketPongTimeout(timeout time.Duration) {
+	a.pongWait = timeout
+	if timeout == 0 {
+		timeout = defaultPongWait
 	}
+	// Ping often enough that a client answering every ping is never closed.
+	a.pingPeriod = timeout * 9 / 10
 }
 
 func accountIdentifierFromParam(c *gin.Context) (utils.IdentifierType, string, error) {
@@ -625,16 +635,13 @@ func (a *Api) handleSignalReceive(ws *websocket.Conn, number string, stop chan s
 					}
 
 					if response.Account == number {
-						a.wsMutex.Lock()
 						err = ws.WriteMessage(websocket.TextMessage, []byte(data))
 						if err != nil {
 							if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 								log.Error("Couldn't write message: " + err.Error())
 							}
-							a.wsMutex.Unlock()
 							return
 						}
-						a.wsMutex.Unlock()
 					}
 				}
 			} else {
@@ -644,49 +651,63 @@ func (a *Api) handleSignalReceive(ws *websocket.Conn, number string, stop chan s
 					log.Error("Couldn't serialize error message: " + err.Error())
 					return
 				}
-				a.wsMutex.Lock()
 				err = ws.WriteMessage(websocket.TextMessage, errorMsgBytes)
 				if err != nil {
 					log.Error("Couldn't write message: " + err.Error())
-					a.wsMutex.Unlock()
 					return
 				}
-				a.wsMutex.Unlock()
 			}
 		}
 	}
 }
 
-func wsPong(ws *websocket.Conn, stop chan struct{}) {
+// wsPong reads from the WebSocket until it fails, then stops the other
+// goroutines of the connection.
+func (a *Api) wsPong(ws *websocket.Conn, stop chan struct{}) {
 	defer func() {
 		close(stop)
 		ws.Close()
 	}()
 
+	// wsPing pings the client, and RFC 6455 requires an endpoint to answer
+	// every ping. A client that stops answering is gone; without a deadline
+	// it stays attached until TCP gives up, and in manual receive mode keeps
+	// signal-cli receiving messages that nobody gets.
+	extendDeadline := func() error {
+		if a.pongWait == 0 {
+			return nil
+		}
+		return ws.SetReadDeadline(time.Now().Add(a.pongWait))
+	}
 	ws.SetReadLimit(512)
-	ws.SetPongHandler(func(string) error { log.Debug("Received pong"); return nil })
+	if err := extendDeadline(); err != nil {
+		return
+	}
+	// Only a pong renews the deadline: a client that sends messages but no
+	// pongs does not answer the pings.
+	ws.SetPongHandler(func(string) error { log.Debug("Received pong"); return extendDeadline() })
 	for {
-		_, _, err := ws.ReadMessage()
-		if err != nil {
-			break
+		if _, _, err := ws.ReadMessage(); err != nil {
+			return
 		}
 	}
 }
 
 func (a *Api) wsPing(ws *websocket.Conn, stop chan struct{}) {
-	pingTicker := time.NewTicker(pingPeriod)
+	pingTicker := time.NewTicker(a.pingPeriod)
+	defer pingTicker.Stop()
 	for {
 		select {
 		case <-stop:
-			ws.Close()
 			return
 		case <-pingTicker.C:
-			a.wsMutex.Lock()
-			if err := ws.WriteMessage(websocket.PingMessage, []byte{}); err != nil {
-				a.wsMutex.Unlock()
+			// WriteControl may run concurrently with handleSignalReceive's
+			// writes, so no lock shared between WebSockets is needed; it
+			// still waits for a write in progress on this one, up to
+			// writeWait.
+			if err := ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeWait)); err != nil {
 				return
 			}
-			a.wsMutex.Unlock()
 		}
 	}
 }
@@ -731,7 +752,7 @@ func (a *Api) Receive(c *gin.Context) {
 		var stop = make(chan struct{})
 		go a.handleSignalReceive(ws, number, stop)
 		go a.wsPing(ws, stop)
-		wsPong(ws, stop)
+		a.wsPong(ws, stop)
 	} else {
 		timeout := c.DefaultQuery("timeout", "1")
 		timeoutInt, err := strconv.ParseInt(timeout, 10, 32)
