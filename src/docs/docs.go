@@ -2845,7 +2845,7 @@ const docTemplate = `{
                 ]
             },
             "get": {
-                "description": "Serve the attachment with the given id",
+                "description": "Stream the attachment with the given id. Supports HTTP byte ranges (Range, If-Range) and conditional requests on its modification time (If-Modified-Since, If-Unmodified-Since).",
                 "parameters": [
                     {
                         "description": "Attachment ID",
@@ -2853,22 +2853,103 @@ const docTemplate = `{
                         "name": "attachment",
                         "required": true,
                         "type": "string"
+                    },
+                    {
+                        "description": "HTTP byte range",
+                        "in": "header",
+                        "name": "Range",
+                        "type": "string"
                     }
                 ],
                 "produces": [
-                    "application/json"
+                    "application/octet-stream"
                 ],
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "string"
+                            "type": "file"
+                        }
+                    },
+                    "206": {
+                        "description": "Partial Content",
+                        "schema": {
+                            "type": "file"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/api.Error"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Error"
+                        }
+                    },
+                    "416": {
+                        "description": "Requested Range Not Satisfiable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "summary": "Serve Attachment.",
+                "tags": [
+                    "Attachments"
+                ]
+            },
+            "head": {
+                "description": "Stream the attachment with the given id. Supports HTTP byte ranges (Range, If-Range) and conditional requests on its modification time (If-Modified-Since, If-Unmodified-Since).",
+                "parameters": [
+                    {
+                        "description": "Attachment ID",
+                        "in": "path",
+                        "name": "attachment",
+                        "required": true,
+                        "type": "string"
+                    },
+                    {
+                        "description": "HTTP byte range",
+                        "in": "header",
+                        "name": "Range",
+                        "type": "string"
+                    }
+                ],
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "206": {
+                        "description": "Partial Content",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Error"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Error"
+                        }
+                    },
+                    "416": {
+                        "description": "Requested Range Not Satisfiable",
+                        "schema": {
+                            "type": "string"
                         }
                     }
                 },
