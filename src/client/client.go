@@ -1939,81 +1939,84 @@ func (s *SignalClient) OpenAttachment(attachment string) (*os.File, os.FileInfo,
 }
 
 func (s *SignalClient) UpdateProfile(number string, profileName string, base64Avatar string, about *string) error {
-	var err error
-	var avatarTmpPath string
+	var avatar *string
 	if base64Avatar != "" {
-		u, err := uuid.NewV4()
+		avatar = &base64Avatar
+	}
+	return s.PatchProfile(number, &profileName, avatar, base64Avatar == "", about)
+}
+
+// PatchProfile changes only the given profile fields: a nil name, avatar or
+// about, and removeAvatar false, leave that field as it is, because
+// signal-cli's updateProfile keeps every field it is not given.
+func (s *SignalClient) PatchProfile(number string, name *string, base64Avatar *string, removeAvatar bool, about *string) error {
+	if base64Avatar != nil && removeAvatar {
+		return errors.New("An avatar cannot be set and removed at the same time")
+	}
+	var avatarPath string
+	if base64Avatar != nil {
+		var err error
+		avatarPath, err = s.writeAvatarTmpFile(*base64Avatar)
 		if err != nil {
 			return err
 		}
-
-		avatarBytes, err := base64.StdEncoding.DecodeString(base64Avatar)
-		if err != nil {
-			return errors.New("Couldn't decode base64 encoded avatar: " + err.Error())
-		}
-
-		fType, err := filetype.Get(avatarBytes)
-		if err != nil {
-			return err
-		}
-
-		avatarTmpPath = s.avatarTmpDir + u.String() + "." + fType.Extension
-
-		f, err := os.Create(avatarTmpPath)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-
-		if _, err := f.Write(avatarBytes); err != nil {
-			cleanupTmpFiles([]string{avatarTmpPath})
-			return err
-		}
-		if err := f.Sync(); err != nil {
-			cleanupTmpFiles([]string{avatarTmpPath})
-			return err
-		}
-		f.Close()
+		defer cleanupTmpFiles([]string{avatarPath})
 	}
 
 	if s.signalCliMode == JsonRpc {
 		type Request struct {
-			Name         string  `json:"given-name"`
+			Name         *string `json:"given-name,omitempty"`
 			Avatar       string  `json:"avatar,omitempty"`
-			RemoveAvatar bool    `json:"remove-avatar"`
+			RemoveAvatar bool    `json:"remove-avatar,omitempty"`
 			About        *string `json:"about,omitempty"`
 		}
-		request := Request{Name: profileName}
-		request.About = about
-		if base64Avatar == "" {
-			request.RemoveAvatar = true
-		} else {
-			request.Avatar = avatarTmpPath
-			request.RemoveAvatar = false
-		}
-
 		jsonRpc2Client, err := s.getJsonRpc2Client()
 		if err != nil {
 			return err
 		}
+		request := Request{Name: name, Avatar: avatarPath, RemoveAvatar: removeAvatar, About: about}
 		_, err = jsonRpc2Client.getRaw("updateProfile", &number, request)
-	} else {
-		cmd := []string{"--config", s.signalCliConfig, "-a", number, "updateProfile", "--given-name", profileName}
-		if base64Avatar == "" {
-			cmd = append(cmd, "--remove-avatar")
-		} else {
-			cmd = append(cmd, []string{"--avatar", avatarTmpPath}...)
-		}
-
-		if about != nil {
-			cmd = append(cmd, []string{"--about", *about}...)
-		}
-
-		_, err = s.cliClient.Execute(true, cmd, "")
+		return err
 	}
 
-	cleanupTmpFiles([]string{avatarTmpPath})
+	cmd := []string{"--config", s.signalCliConfig, "-a", number, "updateProfile"}
+	if name != nil {
+		cmd = append(cmd, "--given-name", *name)
+	}
+	if removeAvatar {
+		cmd = append(cmd, "--remove-avatar")
+	} else if avatarPath != "" {
+		cmd = append(cmd, "--avatar", avatarPath)
+	}
+	if about != nil {
+		cmd = append(cmd, "--about", *about)
+	}
+	_, err := s.cliClient.Execute(true, cmd, "")
 	return err
+}
+
+// writeAvatarTmpFile stores a base64 avatar in the avatar directory, for
+// signal-cli to read. The caller removes the file.
+func (s *SignalClient) writeAvatarTmpFile(base64Avatar string) (string, error) {
+	avatarBytes, err := base64.StdEncoding.DecodeString(base64Avatar)
+	if err != nil {
+		return "", errors.New("Couldn't decode base64 encoded avatar: " + err.Error())
+	}
+	fType, err := filetype.Get(avatarBytes)
+	if err != nil {
+		return "", err
+	}
+	u, err := uuid.NewV4()
+	if err != nil {
+		return "", err
+	}
+	path := s.avatarTmpDir + u.String() + "." + fType.Extension
+	// 0666 before umask, as os.Create gave it.
+	if err := os.WriteFile(path, avatarBytes, 0666); err != nil {
+		cleanupTmpFiles([]string{path})
+		return "", err
+	}
+	return path, nil
 }
 
 func (s *SignalClient) ListIdentities(number string) (*[]IdentityEntry, error) {

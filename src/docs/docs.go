@@ -219,6 +219,23 @@ const docTemplate = `{
             ],
             "type": "object"
         },
+        "api.PatchProfileRequest": {
+            "properties": {
+                "about": {
+                    "type": "string"
+                },
+                "base64_avatar": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "remove_avatar": {
+                    "type": "boolean"
+                }
+            },
+            "type": "object"
+        },
         "api.PinMessageInGroupRequest": {
             "properties": {
                 "duration": {
@@ -4484,6 +4501,48 @@ const docTemplate = `{
             }
         },
         "/v1/profiles/{number}": {
+            "patch": {
+                "description": "Change only the given profile fields and keep the others. An empty about clears it. base64_avatar and remove_avatar cannot be combined.",
+                "parameters": [
+                    {
+                        "description": "Profile fields to change",
+                        "in": "body",
+                        "name": "data",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.PatchProfileRequest"
+                        }
+                    },
+                    {
+                        "description": "Account identifier (E.164 phone number or ACI UUID)",
+                        "in": "path",
+                        "name": "number",
+                        "required": true,
+                        "type": "string"
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Error"
+                        }
+                    }
+                },
+                "summary": "Update parts of the profile.",
+                "tags": [
+                    "Profiles"
+                ]
+            },
             "put": {
                 "description": "Set your name and optional an avatar.",
                 "parameters": [
