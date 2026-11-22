@@ -28,7 +28,9 @@ const (
 
 const EscapeCharacter rune = '\\'
 
-func getUtf16StringLength(s string) int {
+// Utf16StringLength counts s in UTF-16 code units, the unit of Signal's
+// mention and style ranges.
+func Utf16StringLength(s string) int {
 	runes := []rune(s) //turn string to slice
 
 	length := 0
@@ -116,11 +118,11 @@ func (l *TextstyleParser) peek() rune {
 
 func (l *TextstyleParser) handleToken(tokenType int, signalCliStylingType string) {
 	if l.tokens.Empty() {
-		l.tokens.Push(TokenState{BeginPos: getUtf16StringLength(l.fullString), Token: tokenType})
+		l.tokens.Push(TokenState{BeginPos: Utf16StringLength(l.fullString), Token: tokenType})
 	} else {
 		if l.tokens.Peek().Token == tokenType {
 			tokenBeginState := l.tokens.Pop()
-			length := getUtf16StringLength(l.fullString) - tokenBeginState.BeginPos
+			length := Utf16StringLength(l.fullString) - tokenBeginState.BeginPos
 
 			if tokenType == BoldItalicBegin {
 				l.signalCliFormatStrings = append(l.signalCliFormatStrings, strconv.Itoa(tokenBeginState.BeginPos)+":"+strconv.Itoa(length)+":"+Bold)
@@ -129,7 +131,7 @@ func (l *TextstyleParser) handleToken(tokenType int, signalCliStylingType string
 				l.signalCliFormatStrings = append(l.signalCliFormatStrings, strconv.Itoa(tokenBeginState.BeginPos)+":"+strconv.Itoa(length)+":"+signalCliStylingType)
 			}
 		} else {
-			l.tokens.Push(TokenState{BeginPos: getUtf16StringLength(l.fullString), Token: tokenType})
+			l.tokens.Push(TokenState{BeginPos: Utf16StringLength(l.fullString), Token: tokenType})
 		}
 	}
 }

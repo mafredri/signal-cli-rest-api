@@ -468,6 +468,12 @@ const docTemplate = `{
                     ],
                     "type": "string"
                 },
+                "text_styles": {
+                    "items": {
+                        "$ref": "#/definitions/data.MessageTextStyle"
+                    },
+                    "type": "array"
+                },
                 "view_once": {
                     "type": "boolean"
                 }
@@ -1114,6 +1120,32 @@ const docTemplate = `{
                 "author",
                 "length",
                 "start"
+            ],
+            "type": "object"
+        },
+        "data.MessageTextStyle": {
+            "properties": {
+                "length": {
+                    "type": "integer"
+                },
+                "start": {
+                    "type": "integer"
+                },
+                "style": {
+                    "enum": [
+                        "BOLD",
+                        "ITALIC",
+                        "SPOILER",
+                        "STRIKETHROUGH",
+                        "MONOSPACE"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "length",
+                "start",
+                "style"
             ],
             "type": "object"
         },
@@ -5184,7 +5216,7 @@ const docTemplate = `{
                 "consumes": [
                     "application/json"
                 ],
-                "description": "Send a signal message. Set the text_mode to 'styled' in case you want to add formatting to your text message. Styling Options: \\*italic text\\*, \\*\\*bold text\\*\\*, ~strikethrough text~, ||spoiler||, \\` + "`" + `monospace\\` + "`" + `. If you want to escape a formatting character, prefix it with two backslashes.",
+                "description": "Send a signal message. Set the text_mode to 'styled' in case you want to add formatting to your text message. Styling Options: \\*italic text\\*, \\*\\*bold text\\*\\*, ~strikethrough text~, ||spoiler||, \\` + "`" + `monospace\\` + "`" + `. If you want to escape a formatting character, prefix it with two backslashes. Alternatively, set text_styles to style ranges of the unmodified text, counted in UTF-16 code units like mentions; each range must lie within the message. text_styles cannot be combined with the styled text_mode, and DEFAULT_SIGNAL_TEXT_MODE does not apply to a request with text_styles.",
                 "parameters": [
                     {
                         "description": "Input Data",
