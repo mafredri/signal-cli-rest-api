@@ -168,6 +168,14 @@ type UpdateProfileRequest struct {
 	About        *string `json:"about,omitempty"`
 }
 
+// PatchProfileRequest changes only the fields it contains.
+type PatchProfileRequest struct {
+	Name         *string `json:"name,omitempty"`
+	About        *string `json:"about,omitempty"`
+	Base64Avatar *string `json:"base64_avatar,omitempty"`
+	RemoveAvatar bool    `json:"remove_avatar,omitempty"`
+}
+
 type TrustIdentityRequest struct {
 	VerifiedSafetyNumber *string `json:"verified_safety_number,omitempty"`
 	TrustAllKnownKeys    *bool   `json:"trust_all_known_keys,omitempty" example:"false"`
@@ -1526,6 +1534,51 @@ func (a *Api) UpdateProfile(c *gin.Context) {
 
 	err = a.signalClient.UpdateProfile(number, req.Name, req.Base64Avatar, req.About)
 	if err != nil {
+		c.JSON(400, Error{Msg: err.Error()})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
+// @Summary Update parts of the profile.
+// @Tags Profiles
+// @Description Change only the given profile fields and keep the others. An empty about clears it. base64_avatar and remove_avatar cannot be combined.
+// @Produce  json
+// @Success 204 {string} OK
+// @Failure 400 {object} Error
+// @Param data body PatchProfileRequest true "Profile fields to change"
+// @Param number path string true "Account identifier (E.164 phone number or ACI UUID)"
+// @Router /v1/profiles/{number} [patch]
+func (a *Api) PatchProfile(c *gin.Context) {
+	_, number, err := accountIdentifierFromParam(c)
+	if err != nil {
+		c.JSON(400, Error{Msg: err.Error()})
+		return
+	}
+
+	var req PatchProfileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, Error{Msg: "Couldn't process request - invalid request"})
+		return
+	}
+
+	switch {
+	case req.Name == nil && req.About == nil && req.Base64Avatar == nil && !req.RemoveAvatar:
+		c.JSON(400, Error{Msg: "Couldn't process request - no profile field given"})
+		return
+	case req.Name != nil && strings.TrimSpace(*req.Name) == "":
+		c.JSON(400, Error{Msg: "Couldn't process request - profile name is empty"})
+		return
+	case req.Base64Avatar != nil && *req.Base64Avatar == "":
+		c.JSON(400, Error{Msg: "Couldn't process request - base64_avatar is empty; use remove_avatar to remove the avatar"})
+		return
+	case req.Base64Avatar != nil && req.RemoveAvatar:
+		c.JSON(400, Error{Msg: "Couldn't process request - base64_avatar and remove_avatar cannot be combined"})
+		return
+	}
+
+	if err := a.signalClient.PatchProfile(number, req.Name, req.Base64Avatar, req.RemoveAvatar, req.About); err != nil {
 		c.JSON(400, Error{Msg: err.Error()})
 		return
 	}
