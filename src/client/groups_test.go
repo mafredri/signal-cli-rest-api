@@ -91,3 +91,28 @@ func TestSignalCliGroupEntryToExpandedGroupEntry(t *testing.T) {
 		}
 	}
 }
+
+// TestSignalCliGroupEntryPermissions uses groups whose edit permission
+// differs from their add and send permissions, so edit_group mapped from
+// another signal-cli permission shows up.
+func TestSignalCliGroupEntryPermissions(t *testing.T) {
+	const listGroups = `[
+  {"id": "a", "permissionAddMember": "ONLY_ADMINS", "permissionEditDetails": "EVERY_MEMBER", "permissionSendMessage": "ONLY_ADMINS"},
+  {"id": "b", "permissionAddMember": "EVERY_MEMBER", "permissionEditDetails": "ONLY_ADMINS", "permissionSendMessage": "EVERY_MEMBER"}
+]`
+	var entries []SignalCliGroupEntry
+	if err := json.Unmarshal([]byte(listGroups), &entries); err != nil {
+		t.Fatal(err)
+	}
+	want := []struct{ addMembers, editGroup, sendMessages string }{
+		{"only-admins", "every-member", "only-admins"},
+		{"every-member", "only-admins", "every-member"},
+	}
+	for i, w := range want {
+		p := signalCliGroupEntryToExpandedGroupEntry(entries[i]).Permissions
+		if p.AddMembers != w.addMembers || p.EditGroup != w.editGroup || p.SendMessages != w.sendMessages {
+			t.Errorf("group %s: permissions = %+v, want add_members %s, edit_group %s, send_messages %s",
+				entries[i].Id, p, w.addMembers, w.editGroup, w.sendMessages)
+		}
+	}
+}
