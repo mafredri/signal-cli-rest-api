@@ -9,6 +9,7 @@ import (
 	"os"
 	"plugin"
 	"strconv"
+	"time"
 
 	"github.com/bbernhard/signal-cli-rest-api/api"
 	"github.com/bbernhard/signal-cli-rest-api/client"
@@ -183,6 +184,13 @@ func main() {
 	}
 
 	api := api.NewApi(signalClient)
+	if value := utils.GetEnv("RECEIVE_WEBSOCKET_PONG_TIMEOUT", ""); value != "" {
+		seconds, err := strconv.Atoi(value)
+		if err != nil || seconds < 0 {
+			log.Fatal("Invalid RECEIVE_WEBSOCKET_PONG_TIMEOUT environment variable set! It must be a number of seconds, or 0.")
+		}
+		api.SetWebSocketPongTimeout(time.Duration(seconds) * time.Second)
+	}
 	v1 := router.Group("/v1")
 	{
 		about := v1.Group("/about")
