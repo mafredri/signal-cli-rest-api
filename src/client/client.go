@@ -457,6 +457,7 @@ func (s *SignalClient) Init(maxRetries int) error {
 				return err
 			}
 
+			s.jsonRpc2Clients[number].receiveWebhookUrl = s.receiveWebhookUrl
 			go s.jsonRpc2Clients[number].ReceiveData(number, s.receiveWebhookUrl) //receive messages in goroutine
 		}
 	} else {
