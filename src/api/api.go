@@ -2733,7 +2733,10 @@ func (a *Api) ListContact(c *gin.Context) {
 // @Description Returns the avatar of a contact.
 // @Produce  json
 // @Success 200 {string} string	"Image"
+// @Failure 400 {object} Error
+// @Failure 404 {object} Error
 // @Param number path string true "Account identifier (E.164 phone number or ACI UUID)"
+// @Param uuid path string true "Contact UUID"
 // @Router /v1/contacts/{number}/{uuid}/avatar [get]
 func (a *Api) GetProfileAvatar(c *gin.Context) {
 	_, number, err := accountIdentifierFromParam(c)
@@ -2755,8 +2758,14 @@ func (a *Api) GetProfileAvatar(c *gin.Context) {
 
 	avatar, err := a.signalClient.GetAvatar(number, uuid, client.ProfileAvatar)
 	if err != nil {
-		c.JSON(400, Error{Msg: err.Error()})
-		return
+		switch err.(type) {
+		case *client.NotFoundError:
+			c.JSON(404, Error{Msg: err.Error()})
+			return
+		default:
+			c.JSON(400, Error{Msg: err.Error()})
+			return
+		}
 	}
 
 	mimeType := mimetype.Detect(avatar)
