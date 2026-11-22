@@ -7,6 +7,11 @@ ARG S6_OVERLAY_VERSION=v3.2.2.0
 
 ARG BUILD_VERSION_ARG=unset
 
+# Empty: use the signal-cli release. Otherwise a Git URL and a ref (branch,
+# tag or commit) separated by "#", whose Java distribution is built and used
+# instead, for example https://github.com/AsamK/signal-cli.git#master.
+ARG SIGNAL_CLI_SOURCE=
+
 FROM golang:1.26-trixie AS buildcontainer
 
 ARG SIGNAL_CLI_VERSION
@@ -44,9 +49,33 @@ ENV LANG=en_US.UTF-8
 
 RUN go install github.com/swaggo/swag/cmd/swag@v${SWAG_VERSION}
 
-RUN cd /tmp/ \
-	&& wget -nv https://github.com/AsamK/signal-cli/releases/download/v${SIGNAL_CLI_VERSION}/signal-cli-${SIGNAL_CLI_VERSION}.tar.gz -O /tmp/signal-cli.tar.gz \
-	&& tar xf signal-cli.tar.gz
+# Declared here so that changing it does not rebuild the steps above.
+ARG SIGNAL_CLI_SOURCE
+
+# A source build keeps the version it declares, so the jar and
+# signal-cli --version name the real version; only the directory is named
+# after SIGNAL_CLI_VERSION. The native binary below is always the release's,
+# so MODE=native and json-rpc-native do not run a source build.
+RUN if [ -z "${SIGNAL_CLI_SOURCE}" ]; then \
+		cd /tmp/ \
+		&& wget -nv https://github.com/AsamK/signal-cli/releases/download/v${SIGNAL_CLI_VERSION}/signal-cli-${SIGNAL_CLI_VERSION}.tar.gz -O /tmp/signal-cli.tar.gz \
+		&& tar xf signal-cli.tar.gz; \
+	else \
+		case "${SIGNAL_CLI_SOURCE}" in \
+			*#?*) ;; \
+			*) echo "SIGNAL_CLI_SOURCE must be <git url>#<ref>" && exit 1 ;; \
+		esac \
+		&& apt-get update \
+		&& apt-get -y install --no-install-recommends openjdk-25-jdk-headless \
+		&& rm -rf /var/lib/apt/lists/* \
+		&& git init -q /tmp/signal-cli-source \
+		&& cd /tmp/signal-cli-source \
+		&& git fetch -q --depth=1 "${SIGNAL_CLI_SOURCE%%#*}" "${SIGNAL_CLI_SOURCE#*#}" \
+		&& git checkout -q FETCH_HEAD \
+		&& ./gradlew --no-daemon installDist \
+		&& mkdir /tmp/signal-cli-${SIGNAL_CLI_VERSION} \
+		&& cp -r build/install/signal-cli/bin build/install/signal-cli/lib /tmp/signal-cli-${SIGNAL_CLI_VERSION}/; \
+	fi
 
 RUN if [ "$(uname -m)" = "x86_64" ]; then \
 		cd /tmp \
@@ -75,9 +104,10 @@ RUN ls /tmp/signal-cli-${SIGNAL_CLI_VERSION}/lib/libsignal-client-${LIBSIGNAL_CL
 
 # workaround until upstream is fixed
 RUN cd /tmp/signal-cli-${SIGNAL_CLI_VERSION}/lib \
-	&& unzip signal-cli-${SIGNAL_CLI_VERSION}.jar \
+	&& jar="$(ls signal-cli-*.jar)" \
+	&& unzip "$jar" \
 	&& sed -i 's/Signal-Android\/5.22.3/Signal-Android\/5.51.7/g' org/asamk/signal/BaseConfig.class \
-	&& zip -r signal-cli-${SIGNAL_CLI_VERSION}.jar org/ META-INF/ \
+	&& zip -r "$jar" org/ META-INF/ \
 	&& rm -rf META-INF \
 	&& rm -rf org
 
