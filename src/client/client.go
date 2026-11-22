@@ -2887,7 +2887,6 @@ func (s *SignalClient) ListContacts(number string, allRecipients bool, recipient
 		Number            string                   `json:"number"`
 		Uuid              string                   `json:"uuid"`
 		Name              string                   `json:"name"`
-		ProfileName       string                   `json:"profileName"`
 		Username          string                   `json:"username"`
 		Color             string                   `json:"color"`
 		Blocked           bool                     `json:"blocked"`
@@ -2957,7 +2956,7 @@ func (s *SignalClient) ListContacts(number string, allRecipients bool, recipient
 			Number:            value.Number,
 			Uuid:              value.Uuid,
 			Name:              value.Name,
-			ProfileName:       value.ProfileName,
+			ProfileName:       profileDisplayName(value.Profile.GivenName, value.Profile.FamilyName),
 			Username:          value.Username,
 			Color:             value.Color,
 			Blocked:           value.Blocked,
@@ -2977,6 +2976,29 @@ func (s *SignalClient) ListContacts(number string, allRecipients bool, recipient
 	}
 
 	return resp, nil
+}
+
+// profileDisplayName joins a profile's names as signal-cli's
+// Profile.getDisplayName does. signal-cli's JSON contact has no profile name
+// of its own, only the profile's givenName and familyName.
+func profileDisplayName(givenName string, familyName string) string {
+	switch {
+	case isBlank(givenName):
+		if isBlank(familyName) {
+			return ""
+		}
+		return familyName
+	case isBlank(familyName):
+		return givenName
+	default:
+		return givenName + " " + familyName
+	}
+}
+
+// isBlank reports whether s is empty after Java's String.trim, which
+// signal-cli's Util.isEmpty uses: it removes characters up to U+0020.
+func isBlank(s string) bool {
+	return strings.TrimFunc(s, func(r rune) bool { return r <= ' ' }) == ""
 }
 
 func (s *SignalClient) SetPin(number string, registrationLockPin string) error {
