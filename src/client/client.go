@@ -1371,7 +1371,7 @@ func signalCliGroupEntryToExpandedGroupEntry(signalCliGroupEntry SignalCliGroupE
 	groupEntry.Member = signalCliGroupEntry.IsMember
 	groupEntry.Description = signalCliGroupEntry.Description
 	groupEntry.Permissions.SendMessages = signalCliGroupPermissionToRestApiGroupPermission(signalCliGroupEntry.PermissionSendMessage)
-	groupEntry.Permissions.EditGroup = signalCliGroupPermissionToRestApiGroupPermission(signalCliGroupEntry.PermissionSendMessage)
+	groupEntry.Permissions.EditGroup = signalCliGroupPermissionToRestApiGroupPermission(signalCliGroupEntry.PermissionEditDetails)
 	groupEntry.Permissions.AddMembers = signalCliGroupPermissionToRestApiGroupPermission(signalCliGroupEntry.PermissionAddMember)
 	groupEntry.Members = signalCliGroupEntry.Members
 	groupEntry.PendingInvites = signalCliGroupEntry.PendingMembers
