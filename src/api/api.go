@@ -126,22 +126,23 @@ type SendMessageV1 struct {
 }
 
 type SendMessageV2 struct {
-	Number            string              `json:"number"` // Account identifier (E.164 phone number or ACI UUID)
-	Recipients        []string            `json:"recipients"`
-	Recipient         string              `json:"recipient,omitempty" swaggerignore:"true"` //some REST API consumers (like the Synology NAS) do not support an array as recipients, so we provide this string parameter here as backup. In order to not confuse anyone, the parameter won't be exposed in the Swagger UI (most users are fine with the recipients parameter).
-	Message           string              `json:"message"`
-	Base64Attachments []string            `json:"base64_attachments,omitempty" example:"<BASE64 ENCODED DATA>,data:<MIME-TYPE>;base64<comma><BASE64 ENCODED DATA>,data:<MIME-TYPE>;filename=<FILENAME>;base64<comma><BASE64 ENCODED DATA>"`
-	Sticker           string              `json:"sticker,omitempty"`
-	Mentions          []ds.MessageMention `json:"mentions,omitempty"`
-	QuoteTimestamp    *int64              `json:"quote_timestamp,omitempty"`
-	QuoteAuthor       *string             `json:"quote_author,omitempty"`
-	QuoteMessage      *string             `json:"quote_message,omitempty"`
-	QuoteMentions     []ds.MessageMention `json:"quote_mentions,omitempty"`
-	TextMode          *string             `json:"text_mode,omitempty" enums:"normal,styled"`
-	EditTimestamp     *int64              `json:"edit_timestamp,omitempty"`
-	NotifySelf        *bool               `json:"notify_self,omitempty"`
-	LinkPreview       *ds.LinkPreviewType `json:"link_preview,omitempty"`
-	ViewOnce          *bool               `json:"view_once,omitempty"`
+	Number            string                `json:"number"` // Account identifier (E.164 phone number or ACI UUID)
+	Recipients        []string              `json:"recipients"`
+	Recipient         string                `json:"recipient,omitempty" swaggerignore:"true"` //some REST API consumers (like the Synology NAS) do not support an array as recipients, so we provide this string parameter here as backup. In order to not confuse anyone, the parameter won't be exposed in the Swagger UI (most users are fine with the recipients parameter).
+	Message           string                `json:"message"`
+	Base64Attachments []string              `json:"base64_attachments,omitempty" example:"<BASE64 ENCODED DATA>,data:<MIME-TYPE>;base64<comma><BASE64 ENCODED DATA>,data:<MIME-TYPE>;filename=<FILENAME>;base64<comma><BASE64 ENCODED DATA>"`
+	Sticker           string                `json:"sticker,omitempty"`
+	Mentions          []ds.MessageMention   `json:"mentions,omitempty"`
+	QuoteTimestamp    *int64                `json:"quote_timestamp,omitempty"`
+	QuoteAuthor       *string               `json:"quote_author,omitempty"`
+	QuoteMessage      *string               `json:"quote_message,omitempty"`
+	QuoteMentions     []ds.MessageMention   `json:"quote_mentions,omitempty"`
+	TextMode          *string               `json:"text_mode,omitempty" enums:"normal,styled"`
+	TextStyles        []ds.MessageTextStyle `json:"text_styles,omitempty"`
+	EditTimestamp     *int64                `json:"edit_timestamp,omitempty"`
+	NotifySelf        *bool                 `json:"notify_self,omitempty"`
+	LinkPreview       *ds.LinkPreviewType   `json:"link_preview,omitempty"`
+	ViewOnce          *bool                 `json:"view_once,omitempty"`
 }
 
 type TypingIndicatorRequest struct {
@@ -508,7 +509,7 @@ func (a *Api) Send(c *gin.Context) {
 
 // @Summary Send a signal message.
 // @Tags Messages
-// @Description Send a signal message. Set the text_mode to 'styled' in case you want to add formatting to your text message. Styling Options: \*italic text\*, \*\*bold text\*\*, ~strikethrough text~, ||spoiler||, \`monospace\`. If you want to escape a formatting character, prefix it with two backslashes.
+// @Description Send a signal message. Set the text_mode to 'styled' in case you want to add formatting to your text message. Styling Options: \*italic text\*, \*\*bold text\*\*, ~strikethrough text~, ||spoiler||, \`monospace\`. If you want to escape a formatting character, prefix it with two backslashes. Alternatively, set text_styles to style ranges of the unmodified text, counted in UTF-16 code units like mentions; each range must lie within the message. text_styles cannot be combined with the styled text_mode, and DEFAULT_SIGNAL_TEXT_MODE does not apply to a request with text_styles.
 // @Accept  json
 // @Produce  json
 // @Success 201 {array} ds.SendMessageResponse
@@ -548,7 +549,9 @@ func (a *Api) SendV2(c *gin.Context) {
 	}
 
 	textMode := req.TextMode
-	if textMode == nil {
+	// The default text mode does not apply to a request with explicit ranges,
+	// which describe the text as given.
+	if textMode == nil && req.TextStyles == nil {
 		defaultSignalTextMode := utils.GetEnv("DEFAULT_SIGNAL_TEXT_MODE", "normal")
 		if defaultSignalTextMode == "styled" {
 			styledStr := "styled"
@@ -564,7 +567,7 @@ func (a *Api) SendV2(c *gin.Context) {
 	data, err := a.signalClient.SendV2(
 		req.Number, req.Message, req.Recipients, req.Base64Attachments, req.Sticker,
 		req.Mentions, req.QuoteTimestamp, req.QuoteAuthor, req.QuoteMessage, req.QuoteMentions,
-		textMode, req.EditTimestamp, req.NotifySelf, req.LinkPreview, req.ViewOnce)
+		textMode, req.EditTimestamp, req.NotifySelf, req.LinkPreview, req.ViewOnce, req.TextStyles)
 	if err != nil {
 		switch err.(type) {
 		case *client.RateLimitErrorType:

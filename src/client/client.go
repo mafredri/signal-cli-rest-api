@@ -488,6 +488,27 @@ func validateLinkPreview(message string, linkPreview *ds.LinkPreviewType) error 
 	return nil
 }
 
+// textStyleArgs converts explicit style ranges to signal-cli's text-style
+// arguments. Each range must lie within the message: Signal clients drop a
+// message whose style range extends past its text, while the send still
+// succeeds.
+func textStyleArgs(message string, styles []ds.MessageTextStyle) ([]string, error) {
+	length := int64(utils.Utf16StringLength(message))
+	args := make([]string, 0, len(styles))
+	for _, style := range styles {
+		switch style.Style {
+		case utils.Bold, utils.Italic, utils.Spoiler, utils.Strikethrough, utils.Monospace:
+		default:
+			return nil, errors.New("invalid text style " + strconv.Quote(style.Style))
+		}
+		if style.Start < 0 || style.Length <= 0 || style.Start > length || style.Length > length-style.Start {
+			return nil, fmt.Errorf("text style range %d:%d is outside the message, which is %d UTF-16 code units long", style.Start, style.Length, length)
+		}
+		args = append(args, style.ToString())
+	}
+	return args, nil
+}
+
 func (s *SignalClient) send(signalCliSendRequest ds.SignalCliSendRequest) (*ds.SendMessageResponse, error) {
 	var rawData string
 	var linkPreviewAttachmentEntry *AttachmentEntry = nil
@@ -502,10 +523,21 @@ func (s *SignalClient) send(signalCliSendRequest ds.SignalCliSendRequest) (*ds.S
 	}
 
 	signalCliTextFormatStrings := []string{}
-	if signalCliSendRequest.TextMode != nil && *signalCliSendRequest.TextMode == "styled" {
+	styled := signalCliSendRequest.TextMode != nil && *signalCliSendRequest.TextMode == "styled"
+	if styled && signalCliSendRequest.TextStyles != nil {
+		// Both describe the same ranges: the styled parser removes its markers,
+		// which would move the explicit ranges.
+		return nil, errors.New("text_styles cannot be combined with the styled text_mode")
+	}
+	if styled {
 		textstyleParser := utils.NewTextstyleParser(signalCliSendRequest.Message)
 		signalCliSendRequest.Message, signalCliTextFormatStrings = textstyleParser.Parse()
 	}
+	styleArgs, err := textStyleArgs(signalCliSendRequest.Message, signalCliSendRequest.TextStyles)
+	if err != nil {
+		return nil, err
+	}
+	signalCliTextFormatStrings = append(signalCliTextFormatStrings, styleArgs...)
 
 	var groupId string = ""
 	if signalCliSendRequest.RecipientType == ds.Group {
@@ -775,7 +807,7 @@ func (s *SignalClient) About() About {
 		BuildNr:              2,
 		Mode:                 getSignalCliModeString(s.signalCliMode),
 		Version:              utils.GetEnv("BUILD_VERSION", "unset"),
-		Capabilities:         map[string][]string{"v2/send": []string{"quotes", "mentions"}},
+		Capabilities:         map[string][]string{"v2/send": []string{"quotes", "mentions", "text_styles"}},
 	}
 	return about
 }
@@ -961,7 +993,7 @@ func (s *SignalClient) getJsonRpc2Clients() []*JsonRpc2Client {
 
 func (s *SignalClient) SendV2(number string, message string, recps []string, base64Attachments []string, sticker string, mentions []ds.MessageMention,
 	quoteTimestamp *int64, quoteAuthor *string, quoteMessage *string, quoteMentions []ds.MessageMention, textMode *string, editTimestamp *int64, notifySelf *bool,
-	linkPreview *ds.LinkPreviewType, viewOnce *bool) (*[]ds.SendMessageResponse, error) {
+	linkPreview *ds.LinkPreviewType, viewOnce *bool, textStyles []ds.MessageTextStyle) (*[]ds.SendMessageResponse, error) {
 	if len(recps) == 0 {
 		return nil, errors.New("Please provide at least one recipient")
 	}
@@ -1012,7 +1044,7 @@ func (s *SignalClient) SendV2(number string, message string, recps []string, bas
 		signalCliSendRequest := ds.SignalCliSendRequest{Number: number, Message: message, Recipients: []string{group}, Base64Attachments: base64Attachments,
 			RecipientType: ds.Group, Sticker: sticker, Mentions: mentions, QuoteTimestamp: quoteTimestamp,
 			QuoteAuthor: quoteAuthor, QuoteMessage: quoteMessage, QuoteMentions: quoteMentions,
-			TextMode: textMode, EditTimestamp: editTimestamp, NotifySelf: notifySelf, LinkPreview: linkPreview, ViewOnce: viewOnce}
+			TextMode: textMode, TextStyles: textStyles, EditTimestamp: editTimestamp, NotifySelf: notifySelf, LinkPreview: linkPreview, ViewOnce: viewOnce}
 		resp, err := s.send(signalCliSendRequest)
 		if err != nil {
 			return nil, err
@@ -1024,7 +1056,7 @@ func (s *SignalClient) SendV2(number string, message string, recps []string, bas
 		signalCliSendRequest := ds.SignalCliSendRequest{Number: number, Message: message, Recipients: numbers, Base64Attachments: base64Attachments,
 			RecipientType: ds.Number, Sticker: sticker, Mentions: mentions, QuoteTimestamp: quoteTimestamp,
 			QuoteAuthor: quoteAuthor, QuoteMessage: quoteMessage, QuoteMentions: quoteMentions,
-			TextMode: textMode, EditTimestamp: editTimestamp, NotifySelf: notifySelf, LinkPreview: linkPreview, ViewOnce: viewOnce}
+			TextMode: textMode, TextStyles: textStyles, EditTimestamp: editTimestamp, NotifySelf: notifySelf, LinkPreview: linkPreview, ViewOnce: viewOnce}
 		resp, err := s.send(signalCliSendRequest)
 		if err != nil {
 			return nil, err
@@ -1036,7 +1068,7 @@ func (s *SignalClient) SendV2(number string, message string, recps []string, bas
 		signalCliSendRequest := ds.SignalCliSendRequest{Number: number, Message: message, Recipients: usernames, Base64Attachments: base64Attachments,
 			RecipientType: ds.Username, Sticker: sticker, Mentions: mentions, QuoteTimestamp: quoteTimestamp,
 			QuoteAuthor: quoteAuthor, QuoteMessage: quoteMessage, QuoteMentions: quoteMentions,
-			TextMode: textMode, EditTimestamp: editTimestamp, NotifySelf: notifySelf, LinkPreview: linkPreview, ViewOnce: viewOnce}
+			TextMode: textMode, TextStyles: textStyles, EditTimestamp: editTimestamp, NotifySelf: notifySelf, LinkPreview: linkPreview, ViewOnce: viewOnce}
 		resp, err := s.send(signalCliSendRequest)
 		if err != nil {
 			return nil, err
